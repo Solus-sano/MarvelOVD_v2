@@ -24,7 +24,7 @@ class SSODROIHeads(StandardROIHeads):
     def _init_box_head(self, cfg, input_shape):
         ret = super()._init_box_head(cfg, input_shape)
         del ret['box_predictor']
-        ret['box_predictor'] = SSODFastRCNNOutputLayers_2(cfg, ret['box_head'].output_shape)
+        ret['box_predictor'] = SSODFastRCNNOutputLayers(cfg, ret['box_head'].output_shape)
         return ret
 
     @classmethod
@@ -162,7 +162,7 @@ class SSODROIHeads(StandardROIHeads):
                 faster_update_logic_after_nms_3(
                     cls_logits, 
                     gt_boxes.tensor,
-                    beta=0.5,
+                    beta=0.1,
                     sigma=0.0
                 )
             )

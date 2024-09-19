@@ -26,6 +26,7 @@ from utils import COCO_NOVEL_CatName as novelCatNames
 from utils import get_coco_ids_by_order, detections2json
 from utils import multiple_templates, build_text_embedding, scale_box
 from utils import get_region_proposal, get_CLIP_pred_for_proposals
+from logits_decode import faster_update_logits
 
 
 if __name__ == '__main__':
@@ -33,12 +34,12 @@ if __name__ == '__main__':
     parser.add_argument('RPN_config', type=str, help='config file for proposal network')
     parser.add_argument('RPN_weight_file', type=str, help='weight file for proposal network')
 
-    parser.add_argument('--gt_json', type=str, default='../datasets/coco/annotations/instances_train2017.json',
+    parser.add_argument('--gt_json', type=str, default='../../datasets/coco/annotations/instances_train2017.json',
                         help='GT coco json file. We only annotations of base categories')
     parser.add_argument('--save_dir', type=str, default='./CLIP_scores_for_PLs',
                         help='PL coco json file to save')
 
-    parser.add_argument('--coco_root', type=str, default='../datasets/coco', help='coco root dir')
+    parser.add_argument('--coco_root', type=str, default='../../datasets/coco', help='coco root dir')
     parser.add_argument('--roi_num', type=int, default=10, help='start index')
     parser.add_argument('--clip_model', type=str, default='ViT-B/32', help='clip model type')
 
@@ -123,6 +124,7 @@ if __name__ == '__main__':
     rpnScoreAlllist = list()
     scoreAllList = list()
     cocoIDAllList = list()
+    logitsALLList = list()
 
     # used_image_ids = imgIdsList[:img_end_idx]
     used_image_ids = imgIdsList[img_start_idx:img_end_idx]
@@ -142,23 +144,25 @@ if __name__ == '__main__':
         # get region proposals
         proposal_boxes, pp_scores = get_region_proposal(cvImg, maskRCNN, DataAug=DataAug, roihead_num=roiBoxRepeat_num, topK_box=pp_topK)
         # get CLIP scores
-        curBoxList, curRPNScoreList, curCLIPScoreList, curPredCOCOIdList = get_CLIP_pred_for_proposals(cvImg, proposal_boxes, pp_scores,
+        curBoxList, curRPNScoreList, curCLIPScoreList, curPredCOCOIdList, curCLIPLogitsTensor = get_CLIP_pred_for_proposals(cvImg, proposal_boxes, pp_scores,
                                                                             CLIPModel, preprocess, text_embed, usedCatIds_inOrder,
                                                                             box_scalelist=box_scalelist, topK_clip_scores=topK_clip_scores,
-                                                                            device=device)
+                                                                            device=device, return_logits=True)
 
         # add to final results
         boxAllList.append(curBoxList)
         rpnScoreAlllist.append(curRPNScoreList)
         scoreAllList.append(curCLIPScoreList)
         cocoIDAllList.append(curPredCOCOIdList)
+        logitsALLList.append(curCLIPLogitsTensor.tolist())
 
         # save current data to file
-        if (iidx + 1) % 1000 == 0 or iidx >= len(used_image_ids)-1:
+        if (iidx + 1) % 100 == 0 or iidx >= len(used_image_ids)-1:
             data = {'img_ids_list': imgIdList,
                     'bbox_all_list': boxAllList,
                     'rpn_score_all_list': rpnScoreAlllist,
                     'clip_score_all_list': scoreAllList,
+                    'clip_logits_all_list': logitsALLList,
                     'clip_catIDs_all_list': cocoIDAllList
                     }
 
@@ -173,6 +177,7 @@ if __name__ == '__main__':
             rpnScoreAlllist = list()  # [scores [nx1], ...]
             scoreAllList = list()  # [scores [n x topk], ...]
             cocoIDAllList = list()  # [cat ids [n x topk], ...]
+            logitsALLList = list()  # [logits [n x topk], ...]
 
 # CUDA_VISIBLE_DEVICES=0 python get_CLIP_scores_for_PLs.py '../configs/mask_rcnn_R_50_FPN_1x_base_num1.yaml' './mask_rcnn_R_50_FPN_1x_base_num1.pth' --gt_json ../datasets/coco/annotations/instances_train2017.json --save_dir ./CLIP_scores_for_PLs --start 0 --end 30000
 # CUDA_VISIBLE_DEVICES=1 python get_CLIP_scores_for_PLs.py '../configs/mask_rcnn_R_50_FPN_1x_base_num1.yaml' './mask_rcnn_R_50_FPN_1x_base_num1.pth' --gt_json ../datasets/coco/annotations/instances_train2017.json --save_dir ./CLIP_scores_for_PLs --start 30000 --end 60000

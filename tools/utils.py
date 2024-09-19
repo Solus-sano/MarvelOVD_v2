@@ -205,7 +205,7 @@ def build_text_embedding(model, categories, templates, add_this_is=False, show_p
 
 
 # get multi-scale CLIP image imbedding
-def CLIP_score_multi_scale(clip_model, img_patch_scalelist, text_features, softmax_t=0.01):
+def CLIP_score_multi_scale(clip_model, img_patch_scalelist, text_features, softmax_t=0.01, return_logits=False):
     # img_patch_scalelist: [ [n*patches for scale 1], [n*patches for scale 2], ...]
     # patchNum = img_patch_scalelist[0].shape[0]
 
@@ -217,6 +217,7 @@ def CLIP_score_multi_scale(clip_model, img_patch_scalelist, text_features, softm
         splitIdxList.append(patchNum)
 
     allSimilarity = []
+    allLogits = []
 
     for sp_idx in range(len(splitIdxList) - 1):
         startIdx = splitIdxList[sp_idx]
@@ -242,7 +243,13 @@ def CLIP_score_multi_scale(clip_model, img_patch_scalelist, text_features, softm
         similarity = ((1 / softmax_t) * image_features @ text_features.T).softmax(dim=-1)
         allSimilarity.append(similarity)
 
+        logits = (1 / softmax_t) * image_features @ text_features.T # shape: (1, 17)
+        allLogits.append(logits)
+        
     allSimilarity = torch.cat(allSimilarity, dim=0)
+    allLogits = torch.cat(allLogits, dim=0)
+    if return_logits:
+        return allSimilarity, allLogits
     return allSimilarity
 
 # partially run roi_head of the detectron2 model
@@ -304,7 +311,7 @@ def get_region_proposal(input_img, CA_maskRCNN, DataAug=None, roihead_num=10, to
 
 def get_CLIP_pred_for_proposals(input_img, proposal_boxes, pp_scores,
                                 CLIP_model, preprocess, clip_text_embed, usedCatIds_inOrder,
-                                box_scalelist=[1, 1.5], topK_clip_scores=1, device='cuda'):
+                                box_scalelist=[1, 1.5], topK_clip_scores=1, device='cuda', return_logits=False):
     '''
     input_img: from cv2.imread, in BGR
     proposal_boxes: [[xyxy], [xyxy], ...]
@@ -336,7 +343,7 @@ def get_CLIP_pred_for_proposals(input_img, proposal_boxes, pp_scores,
                 clipInput_list_scalelist[scale_id].append(clipInput)
 
     if len(curBoxList) > 0:
-        allSimilarity = CLIP_score_multi_scale(CLIP_model, clipInput_list_scalelist, clip_text_embed)
+        allSimilarity, allLogits = CLIP_score_multi_scale(CLIP_model, clipInput_list_scalelist, clip_text_embed, return_logits=return_logits)
 
         ############### merge CLIP and RPN scores
         for b_idx, box in enumerate(curBoxList):
@@ -345,6 +352,8 @@ def get_CLIP_pred_for_proposals(input_img, proposal_boxes, pp_scores,
             curCLIPScoreList.append(clipScores.cpu().numpy().tolist())
             curPredCatIdList.append(usedCatIds_inOrder[indices.cpu().numpy()].tolist())
 
+    if return_logits:
+        return curBoxList, curRPNScoreList, curCLIPScoreList, curPredCatIdList, allLogits
     return curBoxList, curRPNScoreList, curCLIPScoreList, curPredCatIdList
 
 def detection_postprocessing(box_List, score_List, pred_id_list,
