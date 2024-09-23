@@ -36,6 +36,7 @@ def faster_update_logits(
     
     novel = torch.tensor([4,5,11,12,15,16,21,23,27,29,32,34,45,47,54,58,63]).to(cls_logits_after_nms_label.device)
     is_novel = torch.isin(cls_logits_after_nms_label, novel)
+    is_novel = torch.ones_like(cls_logits_after_nms_label)
     novel_idx, base_idx = is_novel.nonzero(as_tuple=False).squeeze(1), (is_novel == 0).nonzero(as_tuple=False).squeeze(1)
     
     novel_base_idx_to_init_idx = {b:a for a,b in enumerate(base_idx.tolist() + novel_idx.tolist())}
@@ -107,9 +108,12 @@ def update_logit(
     dt_dt_iou = box_iou(bboxes, p_dt_boxes) # shape: (n1*C, num_filt)
     # 过滤iou值以找到合适的框
     valid_iou = (dt_dt_iou > 0.1) & (dt_dt_iou < 0.7)
-    higher_score = logits.unsqueeze(1) < p_cls_logits.max(dim=-1)[0].unsqueeze(0) # shape: (n1*C, num_filt)
-    # distrub_class =  (labels.unsqueeze(1) != p_cls_logits.argmax(dim=-1).unsqueeze(0)) | ((labels.unsqueeze(1) == p_cls_logits.argmax(dim=-1).unsqueeze(0)) & higher_score) 
-    distrub_class = ((labels.unsqueeze(1) == p_cls_logits.argmax(dim=-1).unsqueeze(0)) & higher_score) 
+    # higher_score = logits.unsqueeze(1) < p_cls_logits.max(dim=-1)[0].unsqueeze(0) # shape: (n1*C, num_filt)
+    scores_per_cls = logits.reshape(-1,17).softmax(dim=-1).reshape(-1)
+    p_cls_scores = p_cls_logits.softmax(dim=-1)
+    higher_score = scores_per_cls.unsqueeze(1) < p_cls_scores.max(dim=-1)[0].unsqueeze(0)
+    distrub_class =  (labels.unsqueeze(1) != p_cls_logits.argmax(dim=-1).unsqueeze(0)) | ((labels.unsqueeze(1) == p_cls_logits.argmax(dim=-1).unsqueeze(0)) & higher_score) 
+    # distrub_class = ((labels.unsqueeze(1) == p_cls_logits.argmax(dim=-1).unsqueeze(0)) & higher_score) 
     ppl_cond = get_condition(logits.reshape(-1,17),sigma)
     ppl_cond = ppl_cond[:,None].expand_as(valid_iou)
     valid_pairs = valid_iou & distrub_class & ppl_cond
