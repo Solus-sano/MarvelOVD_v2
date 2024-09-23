@@ -64,7 +64,7 @@ def postprocessing(
     clip_score_List,
     pred_id_list,
     use_thre=True,
-    thres=0.05,
+    thres=0.5,
     use_pre_cls_nms=True,
     pre_cls_nms_thres=0.6,
     device='cpu'
