@@ -9,6 +9,12 @@ import torch.nn.functional as F
 import clip
 
 from detectron2.structures import ImageList, Boxes
+from torchvision.ops import box_iou, box_area
+from typing import Tuple
+from torch import Tensor
+import os
+import matplotlib.pyplot as plt
+import copy
 
 
 ### class names
@@ -252,6 +258,69 @@ def CLIP_score_multi_scale(clip_model, img_patch_scalelist, text_features, softm
         return allSimilarity, allLogits
     return allSimilarity
 
+def mask_CLIP_score_multi_scale(clip_model, img_patch_scalelist, mask_img_patch_scalelist, text_features, softmax_t=0.01, return_logits=False):
+    # img_patch_scalelist: [ [n*patches for scale 1], [n*patches for scale 2], ...]
+    # patchNum = img_patch_scalelist[0].shape[0]
+
+    patchNum = len(img_patch_scalelist[0])
+    patch_per_split = 1000
+
+    splitIdxList = [i*patch_per_split for i in range(1 + patchNum//patch_per_split)]
+    if splitIdxList[-1] != patchNum:
+        splitIdxList.append(patchNum)
+
+    allSimilarity = []
+    mask_allSimilarity = []
+    allLogits = []
+
+    for sp_idx in range(len(splitIdxList) - 1):
+        startIdx = splitIdxList[sp_idx]
+        endIdx = splitIdxList[sp_idx + 1]
+
+        image_features = None
+        mask_image_features = None
+        for s_id, (imgPatchesList, mask_imgPatchesList) in enumerate(zip(img_patch_scalelist, mask_img_patch_scalelist)):
+            imgPatches = torch.cat(imgPatchesList[startIdx:endIdx], dim=0)
+            mask_imgPatches = torch.cat(mask_imgPatchesList[startIdx:endIdx], dim=0)
+
+            with torch.no_grad():
+                curImgFeat = clip_model.encode_image(imgPatches)
+                curImgFeat /= curImgFeat.norm(dim=-1, keepdim=True)
+                
+                mask_curImgFeat = clip_model.encode_image(mask_imgPatches)
+                mask_curImgFeat /= mask_curImgFeat.norm(dim=-1, keepdim=True)
+
+            if image_features is None:
+                image_features = curImgFeat.clone()
+            else:
+                image_features += curImgFeat
+                
+            if mask_image_features is None:
+                mask_image_features = mask_curImgFeat.clone()
+            else:
+                mask_image_features += mask_curImgFeat
+
+        sacleNum = len(img_patch_scalelist)
+        image_features /= sacleNum
+        image_features /= image_features.norm(dim=-1, keepdim=True)
+        mask_image_features /= sacleNum
+        mask_image_features /= mask_image_features.norm(dim=-1, keepdim=True)
+
+        similarity = ((1 / softmax_t) * image_features @ text_features.T).softmax(dim=-1)
+        allSimilarity.append(similarity)
+        mask_similarity = ((1 / softmax_t) * mask_image_features @ text_features.T).softmax(dim=-1)
+        mask_allSimilarity.append(mask_similarity)
+
+        logits = (1 / softmax_t) * image_features @ text_features.T # shape: (1, 17)
+        allLogits.append(logits)
+        
+    allSimilarity = torch.cat(allSimilarity, dim=0)
+    mask_allSimilarity = torch.cat(mask_allSimilarity, dim=0)
+    allLogits = torch.cat(allLogits, dim=0)
+    if return_logits:
+        return allSimilarity, mask_allSimilarity, allLogits
+    return allSimilarity, mask_allSimilarity
+
 # partially run roi_head of the detectron2 model
 def refineBoxByRoIHead(roi_head, features, proposals):
     with torch.no_grad():
@@ -344,6 +413,105 @@ def get_CLIP_pred_for_proposals(input_img, proposal_boxes, pp_scores,
 
     if len(curBoxList) > 0:
         allSimilarity, allLogits = CLIP_score_multi_scale(CLIP_model, clipInput_list_scalelist, clip_text_embed, return_logits=return_logits)
+
+        ############### merge CLIP and RPN scores
+        for b_idx, box in enumerate(curBoxList):
+            clipScores, indices = allSimilarity[b_idx][:usedCatNum].topk(topK_clip_scores)
+
+            curCLIPScoreList.append(clipScores.cpu().numpy().tolist())
+            curPredCatIdList.append(usedCatIds_inOrder[indices.cpu().numpy()].tolist())
+
+    if return_logits:
+        return curBoxList, curRPNScoreList, curCLIPScoreList, curPredCatIdList, allLogits
+    return curBoxList, curRPNScoreList, curCLIPScoreList, curPredCatIdList
+
+def get_better_CLIP_pred_for_proposals(input_img, proposal_boxes, pp_scores,
+                                CLIP_model, preprocess, clip_text_embed, usedCatIds_inOrder,
+                                box_scalelist=[1, 1.5], topK_clip_scores=1, device='cuda', return_logits=False,
+                                visual_root = None, coco_api = None
+                            ):
+    '''
+    input_img: from cv2.imread, in BGR
+    proposal_boxes: [[xyxy], [xyxy], ...]
+    pp_scores: objectness scores for each region proposal
+    '''
+    height, width = input_img.shape[:2]  # BGR
+    pilImg = Image.fromarray(input_img[:, :, ::-1])  # RGB
+    proposal_boxes, pp_scores = sort_pp_box(proposal_boxes, pp_scores)
+    # get proposal boxes that score > 0.8
+    better_proposal_boxes = []
+    for pp_b, pp_s in zip(proposal_boxes, pp_scores):
+        if pp_s < 0.8:
+            break
+        better_proposal_boxes.append(pp_b)
+
+    usedCatNum = len(usedCatIds_inOrder)
+
+    curBoxList = list()
+    curRPNScoreList = list()
+    curCLIPScoreList = list()
+    curPredCatIdList = list()
+
+    clipInput_list_scalelist = [[] for i in range(len(box_scalelist))]
+    mask_clipInput_list_scalelist = [[] for i in range(len(box_scalelist))]
+    for b_idx, box in enumerate(proposal_boxes):
+        box = scale_box(box, 1, max_H=height, max_W=width)  # ensure every box is in the image
+        if box[2] - box[0] >= 5 and box[3] - box[1] >= 5:
+            curBoxList.append(box)
+            curRPNScoreList.append(pp_scores[b_idx])
+
+            # add scales
+            for scale_id, boxScale in enumerate(box_scalelist):
+                scaledBox = scale_box(box, boxScale, max_H=height, max_W=width)
+                cropImg = pilImg.crop(scaledBox)
+                mask_cropImg = None
+                flag = 0
+                if len(better_proposal_boxes) > 0:
+                    mask_cropImg, flag = mask_overlaps(input_img, scaledBox, better_proposal_boxes, mask_thr=0.5, visual_root = visual_root)
+                    # mask_cropImg = Image.fromarray(mask_cropImg)
+
+                clipInput = preprocess(cropImg).unsqueeze(0).to(device)
+                mask_clipInput = preprocess(mask_cropImg).unsqueeze(0).to(device) if mask_cropImg is not None else copy.deepcopy(clipInput)
+                
+                # if flag == 1:
+                #     with torch.no_grad():
+                #         curImgFeat = CLIP_model.encode_image(clipInput)
+                #         curImgFeat /= curImgFeat.norm(dim=-1, keepdim=True)
+                        
+                #         mask_curImgFeat = CLIP_model.encode_image(mask_clipInput)
+                #         mask_curImgFeat /= mask_curImgFeat.norm(dim=-1, keepdim=True)
+                    
+                #         similarity = ((1 / 0.01) * curImgFeat @ clip_text_embed.T).softmax(dim=-1)
+                #         mask_similarity = ((1 / 0.01) * mask_curImgFeat @ clip_text_embed.T).softmax(dim=-1)
+                        
+                #         score, label = torch.max(similarity, dim=-1)
+                #         mask_score, mask_label = torch.max(mask_similarity, dim=-1)
+                        
+                #         catID = int(usedCatIds_inOrder[label])
+                #         mask_catID = int(usedCatIds_inOrder[mask_label])
+
+                #         cat_name = coco_api.loadCats(catID)[0]['name']
+                #         mask_cat_name = coco_api.loadCats(mask_catID)[0]['name']
+                        
+                #         plt.close()
+                #         fig, axis = plt.subplots(1,2,figsize=(10, 5))
+                #         # title
+                #         title_1 = f'{cat_name}_{float(score):.2f}'
+                #         title_2 = f'{mask_cat_name}_{float(mask_score):.2f}'
+                #         axis[0].imshow(cropImg)
+                #         axis[0].set_title(title_1)
+                #         axis[1].imshow(mask_cropImg)
+                #         axis[1].set_title(title_2)
+                #         plt.savefig(os.path.join(visual_root, f'proposal_{b_idx}_{scale_id}.png'))
+                #         plt.close()
+                
+                # continue
+                clipInput_list_scalelist[scale_id].append(clipInput)
+                mask_clipInput_list_scalelist[scale_id].append(mask_clipInput)
+    # return
+    if len(curBoxList) > 0:
+        allSimilarity, allLogits = CLIP_score_multi_scale(CLIP_model, mask_clipInput_list_scalelist, clip_text_embed, return_logits=return_logits)
+        # allSimilarity, maskallSimilarity, allLogits = mask_CLIP_score_multi_scale(CLIP_model, clipInput_list_scalelist, clip_text_embed, return_logits=return_logits)
 
         ############### merge CLIP and RPN scores
         for b_idx, box in enumerate(curBoxList):
@@ -460,3 +628,187 @@ def scale_box(box, scale, max_H=np.inf, max_W=np.inf):
     new_y1 = min(cy + bh / 2, max_H)
 
     return [new_x0, new_y0, new_x1, new_y1]
+
+
+def sort_pp_box(proposal_boxes, pp_scores):
+    # sort pp boxes according to pp scores
+    proposal_boxes, pp_scores = np.array(proposal_boxes), np.array(pp_scores)
+    sorted_inds = np.argsort(-pp_scores)
+    sorted_boxes = proposal_boxes[sorted_inds,:]
+    sorted_scores = pp_scores[sorted_inds]
+    return sorted_boxes, sorted_scores
+
+def box_inter_union(boxes1: Tensor, boxes2: Tensor) -> Tuple[Tensor, Tensor]:
+    """计算两组矩形框的交集和并集"""
+    area1 = box_area(boxes1)
+    area2 = box_area(boxes2)
+
+    # 找到交集的左上角和右下角坐标
+    inter_x1 = torch.max(boxes1[:, None, 0], boxes2[..., 0])
+    inter_y1 = torch.max(boxes1[:, None, 1], boxes2[..., 1])
+    inter_x2 = torch.min(boxes1[:, None, 2], boxes2[..., 2])
+    inter_y2 = torch.min(boxes1[:, None, 3], boxes2[..., 3])
+
+    # 计算交集的面积
+    inter_area = box_area(torch.stack([inter_x1, inter_y1, inter_x2, inter_y2], dim=-1))
+    inter_area = inter_area.clamp(min=0)  # 确保面积不为负
+
+    # 计算并集的面积
+    union_area = area1[:, None] + area2 - inter_area
+
+    return inter_area, union_area
+
+def get_2_type_boxes_iou(
+        boxes1: Tensor, 
+        boxes2: Tensor
+    ) -> Tuple[Tensor, Tensor]:
+    
+    area1 = box_area(boxes1)
+    area2 = box_area(boxes2)
+
+    # 找到交集的左上角和右下角坐标
+    inter_x1 = torch.max(boxes1[:, None, 0], boxes2[..., 0])
+    inter_y1 = torch.max(boxes1[:, None, 1], boxes2[..., 1])
+    inter_x2 = torch.min(boxes1[:, None, 2], boxes2[..., 2])
+    inter_y2 = torch.min(boxes1[:, None, 3], boxes2[..., 3])
+
+    # 计算交集的面积
+    # print(torch.concat([inter_x1, inter_y1, inter_x2, inter_y2], dim=).shape)
+    inter_area = box_area(torch.stack([inter_x1, inter_y1, inter_x2, inter_y2], dim=-1)[0])
+    inter_area = inter_area.clamp(min=0)  # 确保面积不为负
+
+    # 计算并集的面积
+    # print(area1.shape)
+    # print(area2.shape)
+    # print(inter_area.shape)
+    union_area = area1[:, None] + area2 - inter_area
+    
+    normal_iou = inter_area / union_area
+    bias_iou = inter_area / area1[:, None]
+    return normal_iou, bias_iou
+
+def mask_overlaps(img,
+                box_a, 
+                boxes_b, 
+                mask_thr=0.5,
+                visual_root = None
+            ):
+    """
+    input:
+        img: 输入图像, numpy array of shape (H, W, 3)
+        box_a: 主候选框 A, 格式为 (x0, y0, x1, y1)
+        boxes_b: 一系列候选框 Bi, 格式为 [(xi0, yi0, xi1, yi1), ...]
+        boxes_b_scores: 一系列候选框 Bi 的得分(已按从大到小排序)
+        mask_thr: 面积遮罩阈值
+    return:
+        crop_img: 裁剪后的图像
+    """
+    scaleBox = copy.deepcopy(box_a)
+    box_a, boxes_b = torch.tensor(np.array(box_a)), torch.tensor(np.array(boxes_b))
+    
+    plt.close()
+    # fig, axis = plt.subplots(1,2,figsize=(10, 5))
+    
+    # 裁剪出候选框 A
+    # pilImage = Image.fromarray(img[:,:,::-1])
+    mask_img = copy.deepcopy(img)
+    # crop_img = img[int(box_a[1]):int(box_a[3]), int(box_a[0]):int(box_a[2])].copy()
+    # axis[0].imshow(crop_img[:,:,::-1])
+    img_A_area = (box_a[2] - box_a[0]) * (box_a[3] - box_a[1])
+    total_mask_area = 0
+
+    normal_iou, bias_iou = get_2_type_boxes_iou(box_a[None, :], boxes_b)
+    normal_iou, bias_iou = normal_iou[0], bias_iou[0]
+    # 计算并遮盖重叠区域
+    flag = 0
+    for i, box in enumerate(boxes_b):
+        # 计算交集
+        x0 = int(max(box_a[0], box[0]))
+        y0 = int(max(box_a[1], box[1]))
+        x1 = int(min(box_a[2], box[2]))
+        y1 = int(min(box_a[3], box[3]))
+
+        iou_condition = (bias_iou[i]>0.1) & (normal_iou[i]<0.7)
+        # 检查是否有交集
+        if x0 < x1 and y0 < y1 and iou_condition:
+            # 转换坐标到裁剪图像上
+            # x0 -= int(box_a[0])
+            # x1 -= int(box_a[0])
+            # y0 -= int(box_a[1])
+            # y1 -= int(box_a[1])
+            
+            # 计算遮盖面积
+            mask_area = (y1 - y0) * (x1 - x0)
+            total_mask_area += mask_area
+            if (total_mask_area/img_A_area) > mask_thr:
+                continue
+            
+            # 应用遮罩
+            # print(x0, " ", x1, " ", y0, " ", y1, " ")
+            # crop_img[y0:y1, x0:x1] = 0  # 假设使用黑色遮罩
+            mask_img[y0:y1, x0:x1] = 0
+            flag = 1
+    mask_pilImage = Image.fromarray(mask_img[:,:,::-1])
+    crop_img = mask_pilImage.crop(scaleBox)
+    # if flag == 0:
+    #     return crop_img, 
+    # axis[1].imshow(crop_img[:,:,::-1])
+    # file_name = generate_unique_filename(visual_root,"mask", ".jpg")
+    # plt.savefig(file_name)
+    return crop_img, flag
+
+def generate_unique_filename(dir_path, base_filename, file_extension):
+    i = 0
+    while True:
+        # 如果i为0，就不添加序号，从1开始添加
+        if i == 0:
+            new_filename = f"{base_filename}{file_extension}"
+        else:
+            new_filename = f"{base_filename}_{i}{file_extension}"
+        new_file_path = os.path.join(dir_path, new_filename)
+        # 检查是否存在同名文件
+        if not os.path.exists(new_file_path):
+            return new_file_path
+        i += 1
+
+def random_mask_image(
+    img_size=(224, 224),
+    mask_patch_size=(32, 32),
+    mask_ratio=0.5
+):
+    """Randomly generate mask image with the given mask_ratio"""
+    # Calculate total number of pixels and number of masked pixels
+    total_pixels = img_size[0] * img_size[1]
+    mask_pixels = int(total_pixels * mask_ratio)
+
+    # Create an empty image
+    mask = np.zeros(img_size, dtype=np.uint8)
+
+    # Calculate number of patches based on mask patch size
+    num_patches_x = img_size[0] // mask_patch_size[0]
+    num_patches_y = img_size[1] // mask_patch_size[1]
+    total_patches = num_patches_x * num_patches_y
+    mask_patches = int(total_patches * mask_ratio)
+
+    # Generate random positions for the patches
+    positions = np.random.choice(total_patches, mask_patches, replace=False)
+
+    # Place masked patches on the image
+    for pos in positions:
+        row = (pos // num_patches_y) * mask_patch_size[0]
+        col = (pos % num_patches_y) * mask_patch_size[1]
+        mask[row:row+mask_patch_size[0], col:col+mask_patch_size[1]] = 1
+
+    return mask
+
+if __name__ == '__main__':
+    import cv2
+    img_file = "/data1/liangzhijia/datasets/coco/val2017/000000557672.jpg"
+    img = cv2.imread(img_file)
+    img_tensor = torch.tensor(img.transpose(2, 0, 1))
+    mask = random_mask_image(img_tensor.shape[1:])
+    new_img = img_tensor * mask[None,:,:]
+    # save
+    save_path = "./visual_test.png"
+    cv2.imwrite(save_path, new_img.numpy().transpose(1, 2, 0))
+    
