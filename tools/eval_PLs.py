@@ -219,38 +219,37 @@ def evaluate():
 
     print_csv_format(result)
     
+def create_gt_json():
+    data = load_json("/data1/liangzhijia/datasets/coco/annotations/instances_train2017.json")
+    # dict_keys(['info', 'licenses', 'images', 'annotations', 'categories'])
+    new_ann = []
+    new_category = []
+    meta = MetadataCatalog.get("coco_train")
+    thins_id_to_continugous_id = meta.thing_dataset_id_to_contiguous_id
+    meta_thing_ids = list(thins_id_to_continugous_id.keys())
+    print(len(meta_thing_ids))
+    print("init data len: ", len(data['annotations']))
+    print("init category len: ", len(data['categories']))
+    
+    for ann in tqdm(data['annotations']):
+        catID = ann['category_id']
+        if catID in meta_thing_ids:
+            new_ann.append(ann)
+    
+    for cate in tqdm(data['categories']):
+        catID = cate['id']
+        if catID in meta_thing_ids:
+            new_category.append(cate)
+    
+    data['annotations'] = new_ann
+    data['categories'] = new_category
+    print("after filter data len: ", len(data['annotations']))
+    print("after filter category len: ", len(data['categories']))
+    new_file = "/data1/liangzhijia/datasets/coco/annotations/instances_cat65_train2017.json"
+    
+    with open(new_file, 'w') as f:
+        json.dump(data, f)
+    
 if __name__ == '__main__':
-    # data = load_json("/data1/liangzhijia/datasets/coco/annotations/instances_train2017.json")
-    # # dict_keys(['info', 'licenses', 'images', 'annotations', 'categories'])
-    # new_ann = []
-    # new_category = []
-    # meta = MetadataCatalog.get("coco_train")
-    # thins_id_to_continugous_id = meta.thing_dataset_id_to_contiguous_id
-    # meta_thing_ids = list(thins_id_to_continugous_id.keys())
-    # print(len(meta_thing_ids))
-    # print("init data len: ", len(data['annotations']))
-    # print("init category len: ", len(data['categories']))
-    
-    # for ann in tqdm(data['annotations']):
-    #     catID = ann['category_id']
-    #     if catID in meta_thing_ids:
-    #         new_ann.append(ann)
-    
-    # for cate in tqdm(data['categories']):
-    #     catID = cate['id']
-    #     if catID in meta_thing_ids:
-    #         new_category.append(cate)
-    
-    # data['annotations'] = new_ann
-    # data['categories'] = new_category
-    # print("after filter data len: ", len(data['annotations']))
-    # print("after filter category len: ", len(data['categories']))
-    # new_file = "/data1/liangzhijia/datasets/coco/annotations/instances_cat65_train2017.json"
-    # # data = load_json(new_file)
-    # # for item in data["annotations"]:
-    # #     print(item)
-    
-    # with open(new_file, 'w') as f:
-    #     json.dump(data, f)
-        
+    # create_gt_json()
     evaluate()
