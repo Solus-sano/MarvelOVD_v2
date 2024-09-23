@@ -2,3 +2,5 @@ __pycache__/
 *.pth
 output/
 *.png
+CLIP_scores_for_PLs/
+*.zip
