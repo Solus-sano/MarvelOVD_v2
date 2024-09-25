@@ -219,6 +219,9 @@ EVAL_CATEGORIES = [
     "knife"
 ]
 
+BASE_CATEGORIES_ID = [k["id"] for k in COCO_CATEGORIES if k["name"] in BASE_CATEGORIES]
+EVAL_CATEGORIES_ID = [k["id"] for k in COCO_CATEGORIES if k["name"] in EVAL_CATEGORIES]
+
 
 logger = logging.getLogger(__name__)
 

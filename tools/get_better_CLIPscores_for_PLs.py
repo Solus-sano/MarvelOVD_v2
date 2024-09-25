@@ -26,6 +26,7 @@ from utils import COCO_NOVEL_CatName as novelCatNames
 from utils import get_coco_ids_by_order, detections2json
 from utils import multiple_templates, build_text_embedding, scale_box
 from utils import get_region_proposal, get_CLIP_pred_for_proposals, get_better_CLIP_pred_for_proposals
+from utils import filt_gt_base_box
 from logits_decode import faster_update_logits
 
 from custom_clip.model import build_model as build_custom_clip_model
@@ -150,6 +151,7 @@ def main():
         # os.makedirs(visual_root, exist_ok=True)
         # cv2.imwrite(os.path.join(visual_root, 'ori.png'), cvImg)
         proposal_boxes, pp_scores = get_region_proposal(cvImg, maskRCNN, DataAug=DataAug, roihead_num=roiBoxRepeat_num, topK_box=pp_topK)
+        proposal_boxes, pp_scores = filt_gt_base_box(img_id, proposal_boxes, pp_scores, coco, iou_thresh=0.5)
         # get CLIP scores
         # get_better_CLIP_pred_for_proposals(cvImg, proposal_boxes, pp_scores,
         #                                                                     CLIPModel, preprocess, text_embed, usedCatIds_inOrder,

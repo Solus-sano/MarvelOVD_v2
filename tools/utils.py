@@ -17,6 +17,8 @@ import matplotlib.pyplot as plt
 import copy
 
 import torchvision.transforms as T
+from pycocotools.coco import COCO
+from meta_data import BASE_CATEGORIES_ID
 
 ### class names
 COCO_BASE_CatName = [
@@ -915,6 +917,42 @@ def random_mask_image(
         mask[row:row+mask_patch_size[0], col:col+mask_patch_size[1]] = 1
 
     return mask
+
+
+def filt_gt_base_box(image_id, proposal_boxes, pp_scores, coco: COCO, iou_thresh=0.5):
+    """
+    proposal_boxes 为rpn生成的候选框, 该函数用于过滤掉proposal_boxes中与原用的base类标注重叠过高的框,
+    过滤后剩余的候选框将用于clip生成伪标签
+    input:
+        proposal_boxes: (N, 4)
+        pp_scores: (N, )
+    output:
+        new_proposal_boxes: (M, 4)
+        new_pp_scores: (M, )
+    """
+    # 获取该图片的所有annotation IDs
+    annotation_ids = coco.getAnnIds(imgIds=image_id)
+    
+    # 获取该图片对应的所有annotations
+    annotations = coco.loadAnns(annotation_ids)
+    
+    # 仅保留基类标注
+    gt_base_anns = [item for item in annotations if item['category_id'] in BASE_CATEGORIES_ID]
+    
+    # 提取基类标注的bounding boxes
+    gt_base_boxes = torch.tensor([ann['bbox'] for ann in gt_base_anns])
+    
+    pp_gt_iou = box_iou(torch.tensor(proposal_boxes), gt_base_boxes)
+    
+    keep = pp_gt_iou.max(dim=1).values < iou_thresh
+    
+    # 过滤proposal_boxes和对应的pp_scores
+    new_proposal_boxes = torch.tensor(proposal_boxes)[keep]
+    new_pp_scores = torch.tensor(pp_scores)[keep]
+    
+    return new_proposal_boxes, new_pp_scores
+
+
 
 if __name__ == '__main__':
     import cv2
