@@ -61,9 +61,9 @@ def postprocessing(
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='generate PLs with pre-computed CLIP scores.')
-    parser.add_argument('--gt_json', type=str, default='../datasets/coco/annotations/open_voc/instances_train.json', help='gt coco json file. We only annotations of base categories')
+    parser.add_argument('--gt_json', type=str, default='/data1/liangzhijia//datasets/coco/annotations/open_voc/instances_train.json', help='gt coco json file. We only annotations of base categories')
     parser.add_argument('--clip_score_dir', type=str, default='./CLIP_scores_for_PLs', help='dir to save intermediate CLIP scores')
-    parser.add_argument('--pl_save_file', type=str, default='../datasets/coco/annotations/open_voc/train_novel_candidate_0.5.json',
+    parser.add_argument('--pl_save_file', type=str, default='/data1/liangzhijia/datasets/coco/annotations/open_voc/mask_train_novel_candidate_0.5.json',
                         help='PL coco json file')
 
     parser.add_argument('--lamda', type=float, default=0.5, help='the weight of RPN scores in RPN and CLIP score fusion. CLIP score weight: 1 - lamda (default: 0.5)')
@@ -93,7 +93,7 @@ if __name__ == '__main__':
     print('baseCatIds:', len(baseCatIds), baseCatIds)
     print('novelCatIds:', len(novelCatIds), novelCatIds)
 
-    jsonFileList = sorted(glob.glob(os.path.join(rec_json_dir, '*.json')))
+    jsonFileList = sorted(glob.glob(os.path.join(rec_json_dir, 'CLIP_scores_mask*.json')))
     print('jsonFile num: ', len(jsonFileList))
 
     # load annotations for base categories

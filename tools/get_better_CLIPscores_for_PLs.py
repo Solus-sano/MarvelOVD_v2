@@ -28,16 +28,17 @@ from utils import multiple_templates, build_text_embedding, scale_box
 from utils import get_region_proposal, get_CLIP_pred_for_proposals, get_better_CLIP_pred_for_proposals
 from logits_decode import faster_update_logits
 
+from custom_clip.model import build_model as build_custom_clip_model
 
 def main():
-    os.environ["CUDA_VISIBLE_DEVICES"] = "7"
+    # os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"
     parser = argparse.ArgumentParser(description='Pre-compute CLIP scores for PL generation.')
     parser.add_argument('--RPN_config', type=str, help='config file for proposal network',default="../configs/mask_rcnn_R_50_FPN_1x_base_num1.yaml")
     parser.add_argument('--RPN_weight_file', type=str, help='weight file for proposal network',default="./mask_rcnn_R_50_FPN_1x_base_num1.pth")
 
     parser.add_argument('--gt_json', type=str, default='../../datasets/coco/annotations/instances_train2017.json',
                         help='GT coco json file. We only annotations of base categories')
-    parser.add_argument('--save_dir', type=str, default='./CLIP_scores_for_PLs',
+    parser.add_argument('--save_dir', type=str, default='./CLIP_scores_for_PLs/attn_mask_noise',
                         help='PL coco json file to save')
 
     parser.add_argument('--coco_root', type=str, default='../../datasets/coco', help='coco root dir')
@@ -115,6 +116,8 @@ def main():
     # load CLIP model
     print(clip.available_models())
     CLIPModel, preprocess = clip.load(clip_model_type, device=device)
+    state_dict = torch.load('/data1/liangzhijia/MarvelOVD_v2/checkpoints/ViT-B-32.pt')
+    CLIPModel = build_custom_clip_model(state_dict).to(device)
 
     text_embed = build_text_embedding(CLIPModel, textEmbCatNames, multiple_templates)
     print('text_embed: ', text_embed.shape)
@@ -143,9 +146,9 @@ def main():
         cvImg = cv2.imread(filePath)  # BGR
 
         # get region proposals
-        visual_root = "./visual/" + str(img_id)
-        os.makedirs(visual_root, exist_ok=True)
-        cv2.imwrite(os.path.join(visual_root, 'ori.png'), cvImg)
+        # visual_root = "./visual/" + str(img_id)
+        # os.makedirs(visual_root, exist_ok=True)
+        # cv2.imwrite(os.path.join(visual_root, 'ori.png'), cvImg)
         proposal_boxes, pp_scores = get_region_proposal(cvImg, maskRCNN, DataAug=DataAug, roihead_num=roiBoxRepeat_num, topK_box=pp_topK)
         # get CLIP scores
         # get_better_CLIP_pred_for_proposals(cvImg, proposal_boxes, pp_scores,
@@ -155,7 +158,7 @@ def main():
         curBoxList, curRPNScoreList, curCLIPScoreList, curPredCOCOIdList, curCLIPLogitsTensor = get_better_CLIP_pred_for_proposals(cvImg, proposal_boxes, pp_scores,
                                                                             CLIPModel, preprocess, text_embed, usedCatIds_inOrder,
                                                                             box_scalelist=box_scalelist, topK_clip_scores=topK_clip_scores,
-                                                                            device=device, return_logits=True, visual_root=visual_root, coco_api=coco)
+                                                                            device=device, return_logits=True)
 
         # continue
         # add to final results
@@ -190,7 +193,9 @@ def main():
 
 if __name__ == '__main__':
     main()
-   
+#    CLIPModel, preprocess = clip.load('ViT-B/32', device='cuda')
+#    state_dict = CLIPModel.state_dict()
+#    torch.save(state_dict, '/data1/liangzhijia/MarvelOVD_v2/checkpoints/ViT-B-32.pt')
 
 # CUDA_VISIBLE_DEVICES=0 python get_CLIP_scores_for_PLs.py '../configs/mask_rcnn_R_50_FPN_1x_base_num1.yaml' './mask_rcnn_R_50_FPN_1x_base_num1.pth' --gt_json ../datasets/coco/annotations/instances_train2017.json --save_dir ./CLIP_scores_for_PLs --start 0 --end 30000
 # CUDA_VISIBLE_DEVICES=1 python get_CLIP_scores_for_PLs.py '../configs/mask_rcnn_R_50_FPN_1x_base_num1.yaml' './mask_rcnn_R_50_FPN_1x_base_num1.pth' --gt_json ../datasets/coco/annotations/instances_train2017.json --save_dir ./CLIP_scores_for_PLs --start 30000 --end 60000

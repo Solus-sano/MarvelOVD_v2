@@ -72,19 +72,28 @@ class COCO_json_evaluator(COCOEvaluator):
         # Compute per-category AP
         # from https://github.com/facebookresearch/Detectron/blob/a6a835f5b8208c45d0dce217ce9bbda915f44df7/detectron/datasets/json_dataset_evaluator.py#L222-L252 # noqa
         precisions = coco_eval.eval["precision"]
+        recalls = coco_eval.eval["recall"]
         # precision has dims (iou, recall, cls, area range, max dets)
         print(len(class_names))
         print(precisions.shape)
         assert len(class_names) == precisions.shape[2]
 
         results_per_category = []
+        recall_per_category = []
+        precision_per_category = []
         for idx, name in enumerate(class_names):
             # area range index 0: all area ranges
             # max dets index -1: typically 100 per image
             precision = precisions[0, :, idx, 0, -1]  # calculate ap50
             precision = precision[precision > -1]
+            
+            recall = recalls[0, idx, 0, -1]
+            precision_at_recall = precisions[0, int(recall*100), idx, 0, -1]
+            
             ap = np.mean(precision) if precision.size else float("nan")
             results_per_category.append(("{}".format(name), float(ap * 100)))
+            recall_per_category.append(("{}".format(name), float(recall * 100)))
+            precision_per_category.append(("{}".format(name), float(precision_at_recall * 100)))
         # self._logger.info(
         #     "Evaluation results for AP50 \n" + create_small_table({
         #         "results_base": np.mean([i[1] for i in results_per_category if i[0] in BASE_CATEGORIES]),
@@ -94,6 +103,17 @@ class COCO_json_evaluator(COCOEvaluator):
         results_base = np.mean([i[1] for i in results_per_category if i[0] in BASE_CATEGORIES])
         results_novel = np.mean([i[1] for i in results_per_category if i[0] in EVAL_CATEGORIES])
         results_all = np.mean([i[1] for i in results_per_category])
+        
+        recall_novel = np.mean([i[1] for i in recall_per_category if i[0] in EVAL_CATEGORIES])
+        precision_novel = np.mean([i[1] for i in precision_per_category if i[0] in EVAL_CATEGORIES])
+        
+        self._logger.info(
+            f"Evaluation recall and precision (iou_thr=0.5) \n" + create_small_table({
+                "recall_novel": recall_novel,
+                "precision_novel": precision_novel
+            })
+        )
+        
         self._logger.info(
             "Evaluation results for AP50 \n" + create_small_table({
                 "results_base": results_base,
@@ -127,7 +147,8 @@ class COCO_json_evaluator(COCOEvaluator):
                 "image_id": item["image_id"],
                 "category_id": thing_dataset_id_to_contiguous_id[item["category_id"]],
                 "bbox": item["bbox"],
-                "score": item["score"],
+                # "score": item["clip_score"],
+                "score": item.get("clip_score", 1.0),
             }
             if tmp_map.get(item["image_id"], None) is None:
                 tmp_map[item["image_id"]] = [result]
@@ -212,7 +233,7 @@ def evaluate():
     print(args)
     cfg = setup(args)
     
-    PLs_json_file = "/data1/liangzhijia/datasets/coco/annotations/open_voc/score_train_novel_candidate_0.5.json"
+    PLs_json_file = "/data1/liangzhijia/datasets/coco/annotations/open_voc/mask_train_novel_candidate_0.5.json"
     
     evaluator = COCO_json_evaluator("coco_train", cfg, False)
     result = inference_on_json(PLs_json_file, evaluator)

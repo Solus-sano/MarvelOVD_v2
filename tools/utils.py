@@ -16,6 +16,7 @@ import os
 import matplotlib.pyplot as plt
 import copy
 
+import torchvision.transforms as T
 
 ### class names
 COCO_BASE_CatName = [
@@ -441,7 +442,7 @@ def get_better_CLIP_pred_for_proposals(input_img, proposal_boxes, pp_scores,
     # get proposal boxes that score > 0.8
     better_proposal_boxes = []
     for pp_b, pp_s in zip(proposal_boxes, pp_scores):
-        if pp_s < 0.8:
+        if pp_s < 0.95:
             break
         better_proposal_boxes.append(pp_b)
 
@@ -452,6 +453,12 @@ def get_better_CLIP_pred_for_proposals(input_img, proposal_boxes, pp_scores,
     curCLIPScoreList = list()
     curPredCatIdList = list()
 
+    trans = T.Compose([
+        T.Resize(224),
+        T.CenterCrop(224),
+        T.ToTensor(),
+    ])
+
     clipInput_list_scalelist = [[] for i in range(len(box_scalelist))]
     mask_clipInput_list_scalelist = [[] for i in range(len(box_scalelist))]
     for b_idx, box in enumerate(proposal_boxes):
@@ -460,25 +467,43 @@ def get_better_CLIP_pred_for_proposals(input_img, proposal_boxes, pp_scores,
             curBoxList.append(box)
             curRPNScoreList.append(pp_scores[b_idx])
 
+            mask_PilImg, attention_mask, mask_flag = get_mask_img(input_img,box,better_proposal_boxes,mask_thr=0.5)
             # add scales
             for scale_id, boxScale in enumerate(box_scalelist):
                 scaledBox = scale_box(box, boxScale, max_H=height, max_W=width)
                 cropImg = pilImg.crop(scaledBox)
                 mask_cropImg = None
-                flag = 0
-                if len(better_proposal_boxes) > 0:
-                    mask_cropImg, flag = mask_overlaps(input_img, scaledBox, better_proposal_boxes, mask_thr=0.5, visual_root = visual_root)
+                # flag = 0
+                # if len(better_proposal_boxes) > 0:
+                    # mask_cropImg, flag = mask_overlaps(input_img, scaledBox, better_proposal_boxes, mask_thr=0.5, visual_root = visual_root)
                     # mask_cropImg = Image.fromarray(mask_cropImg)
+                mask_cropImg = mask_PilImg.crop(scaledBox)
+                attention_crop_mask = attention_mask.crop(scaledBox)
 
                 clipInput = preprocess(cropImg).unsqueeze(0).to(device)
-                mask_clipInput = preprocess(mask_cropImg).unsqueeze(0).to(device) if mask_cropImg is not None else copy.deepcopy(clipInput)
+                mask_clipInput = preprocess(mask_cropImg).unsqueeze(0).to(device)
+                attention_crop_mask = trans(attention_crop_mask).unsqueeze(0)[:,-1:,:,:]
+                attention_crop_mask = attention_crop_mask / torch.max(attention_crop_mask)
+                # print(attention_crop_mask)
+                # cnt = torch.sum(attention_crop_mask)
+                # plt.close()
+                # fig, axis = plt.subplots(1,2,figsize=(10, 5))
+                # # title
+                # title_1 = f'mask_img'
+                # title_2 = f'mask_{cnt}'
+                # axis[0].imshow(mask_clipInput[0].cpu().numpy().transpose(1, 2, 0))
+                # axis[0].set_title(title_1)
+                # axis[1].imshow(attention_crop_mask[0,0,:,:].cpu().numpy())
+                # axis[1].set_title(title_2)
+                # plt.savefig(os.path.join(visual_root, f'mask_{b_idx}_{scale_id}.png'))
+                # plt.close()
                 
-                # if flag == 1:
+                # if mask_flag == 1:
                 #     with torch.no_grad():
                 #         curImgFeat = CLIP_model.encode_image(clipInput)
                 #         curImgFeat /= curImgFeat.norm(dim=-1, keepdim=True)
                         
-                #         mask_curImgFeat = CLIP_model.encode_image(mask_clipInput)
+                #         mask_curImgFeat = CLIP_model.encode_image(clipInput, attention_crop_mask)
                 #         mask_curImgFeat /= mask_curImgFeat.norm(dim=-1, keepdim=True)
                     
                 #         similarity = ((1 / 0.01) * curImgFeat @ clip_text_embed.T).softmax(dim=-1)
@@ -492,6 +517,10 @@ def get_better_CLIP_pred_for_proposals(input_img, proposal_boxes, pp_scores,
 
                 #         cat_name = coco_api.loadCats(catID)[0]['name']
                 #         mask_cat_name = coco_api.loadCats(mask_catID)[0]['name']
+                        
+                #         # mask 后变化不大的不进行可视化
+                #         if score < 0.8 and mask_score < 0.8:
+                #             continue
                         
                 #         plt.close()
                 #         fig, axis = plt.subplots(1,2,figsize=(10, 5))
@@ -756,6 +785,92 @@ def mask_overlaps(img,
     # file_name = generate_unique_filename(visual_root,"mask", ".jpg")
     # plt.savefig(file_name)
     return crop_img, flag
+
+def get_mask_img(img,
+                box_a, 
+                boxes_b, 
+                mask_thr=0.5,
+            ):
+    """
+    input:
+        img: 输入图像, numpy array of shape (H, W, 3)
+        box_a: 主候选框 A, 格式为 (x0, y0, x1, y1)
+        boxes_b: 一系列候选框 Bi, 格式为 [(xi0, yi0, xi1, yi1), ...]
+        boxes_b_scores: 一系列候选框 Bi 的得分(已按从大到小排序)
+        mask_thr: 面积遮罩阈值
+    return:
+        mask_PILimg: mask后的原图(PIL Image)
+    """
+    mask_img = torch.tensor(copy.deepcopy(img),dtype=torch.float32) / 255.0
+    attention_mask = torch.ones_like(mask_img)
+    if len(boxes_b) == 0:
+        return Image.fromarray(img[:,:,::-1]), Image.fromarray(attention_mask.numpy().astype(np.uint8)), 0
+    box_a, boxes_b = torch.tensor(np.array(box_a)), torch.tensor(np.array(boxes_b))
+    
+    img_A_area = (box_a[2] - box_a[0]) * (box_a[3] - box_a[1])
+    total_mask_area = 0
+
+    normal_iou, bias_iou = get_2_type_boxes_iou(box_a[None, :], boxes_b)
+    normal_iou, bias_iou = normal_iou[0], bias_iou[0]
+    # 计算并遮盖重叠区域
+    flag = 0
+    for i, box in enumerate(boxes_b):
+        # 计算交集
+        box = scale_box(box, 1, max_H=img.shape[0], max_W=img.shape[1])
+        x0 = int(max(box_a[0], box[0]))
+        y0 = int(max(box_a[1], box[1]))
+        x1 = int(min(box_a[2], box[2]))
+        y1 = int(min(box_a[3], box[3]))
+
+        iou_condition = (bias_iou[i]>0.1) & (normal_iou[i]<0.5)
+        # 检查是否有交集
+        if x0 < x1 and y0 < y1 and iou_condition:
+            
+            # 计算遮盖面积
+            mask_area = (y1 - y0) * (x1 - x0)
+            total_mask_area += mask_area
+            if (total_mask_area/img_A_area) > mask_thr:
+                continue
+            # mask
+            # print(x0, " ", x1, " ", y0, " ", y1, " ")
+            # print(int(box[1]), " ", int(box[3]), " ", int(box[0]), " ", int(box[2]), " ")
+            mask_img[int(box[1]):int(box[3]), int(box[0]):int(box[2]), :] = add_diffusion_noise(mask_img[int(box[1]):int(box[3]), int(box[0]):int(box[2]), :], noise_step=700, beta=0.01)
+            attention_mask[int(box[1]):int(box[3]), int(box[0]):int(box[2]), :] = 0
+            flag = 1
+    mask_img = (mask_img.numpy() * 255).clip(0, 255).astype(np.uint8)
+    mask_pilImage = Image.fromarray(mask_img[:,:,::-1])
+
+    return mask_pilImage, Image.fromarray(attention_mask.numpy().astype(np.uint8)), flag
+
+def add_diffusion_noise(image_tensor, noise_step=999, beta=0.01):
+        num_steps = 1000  # Number of diffusion steps
+
+        # decide beta in each step
+        betas = torch.linspace(-6,6,num_steps)
+        betas = torch.sigmoid(betas) * (beta - 1e-5) + 1e-5
+
+        # decide alphas in each step
+        alphas = 1 - betas
+        alphas_prod = torch.cumprod(alphas, dim=0)
+        alphas_prod_p = torch.cat([torch.tensor([1]).float(), alphas_prod[:-1]],0) # p for previous
+        alphas_bar_sqrt = torch.sqrt(alphas_prod)
+        one_minus_alphas_bar_log = torch.log(1 - alphas_prod)
+        one_minus_alphas_bar_sqrt = torch.sqrt(1 - alphas_prod)
+
+
+        def q_x(x_0, t, mean, std):
+            noise = torch.randn_like(x_0) * std + mean
+            alphas_t = alphas_bar_sqrt[t]
+            alphas_1_m_t = one_minus_alphas_bar_sqrt[t]
+            return (alphas_t * x_0 + alphas_1_m_t * noise)
+        mean = torch.mean(image_tensor)
+        std = torch.std(image_tensor)
+
+        noise_delta = int(noise_step) # from 0-999
+        noisy_image = image_tensor.clone()
+        image_tensor_cd = q_x(noisy_image,noise_step, mean, std) 
+
+        return image_tensor_cd
 
 def generate_unique_filename(dir_path, base_filename, file_extension):
     i = 0

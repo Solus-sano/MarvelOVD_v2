@@ -1,0 +1,10 @@
+Evaluation recall and precision (iou_thr=0.5) 
+
+|  recall_novel  |  precision_novel  |
+|:--------------:|:-----------------:|
+
+clip score
+|     49.342     |       6.962       |
+
+mask(black) clip score
+|     44.967     |       7.184       |
