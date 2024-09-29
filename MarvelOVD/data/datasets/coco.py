@@ -243,7 +243,7 @@ _PREDEFINED_SPLITS_COCO_PSEUDO = {
     
     
     "coco_openvoc_train_with_clip": (
-        "/data1/liangzhijia/datasets/coco/train2017", "/data1/liangzhijia/datasets/coco/annotations/open_voc/train_novel_candidate_0.5.json",
+        "/data1/liangzhijia/datasets/coco/train2017", "/data1/liangzhijia/datasets/coco/annotations/open_voc/attn_mask_train_novel_candidate_0.5.json",
         BASE_CATEGORIES + EVAL_CATEGORIES),
 
 }

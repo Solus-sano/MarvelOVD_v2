@@ -183,14 +183,16 @@ class ResidualAttentionBlock(nn.Module):
         self.ln_2 = LayerNorm(d_model)
         self.attn_mask = attn_mask
 
-    def attention(self, x: torch.Tensor):
+    def attention(self, x: torch.Tensor, attn_mask=None):
+        if attn_mask is not None:
+            return self.attn(x, x, x, need_weights=False, attn_mask=attn_mask)[0]
         self.attn_mask = self.attn_mask.to(dtype=x.dtype, device=x.device) if self.attn_mask is not None else None
         return self.attn(x, x, x, need_weights=False, attn_mask=self.attn_mask)[0]
 
     def forward(self, x: torch.Tensor, attn_mask=None):
         if attn_mask is not None:
-            self.attn_mask = attn_mask.to(dtype=x.dtype, device=x.device) 
-        x = x + self.attention(self.ln_1(x))
+            attn_mask = attn_mask.to(dtype=x.dtype, device=x.device) 
+        x = x + self.attention(self.ln_1(x), attn_mask)
         x = x + self.mlp(self.ln_2(x))
         return x
 
@@ -222,6 +224,7 @@ class VisionTransformer(nn.Module):
         self.ln_pre = LayerNorm(width)
 
         self.transformer = Transformer(width, layers, heads)
+        self.heads = heads
 
         self.ln_post = LayerNorm(width)
         self.proj = nn.Parameter(scale * torch.randn(width, output_dim))
@@ -247,7 +250,12 @@ class VisionTransformer(nn.Module):
             flag = attention_mask>0.5
             # 将需要 mask 的位置设置为 float("-inf")，不需要 mask 的位置设置为 1
             attention_mask = torch.where(flag, torch.tensor(0, device=x.device), torch.tensor(float("-inf"), device=x.device))
-            attention_mask = attention_mask.unsqueeze(1).repeat(1,x.shape[1],1)[0]  # [b, grid**2 + 1, grid**2 + 1]
+            attention_mask = attention_mask.unsqueeze(1).repeat(1,x.shape[1],1)  # [b, grid**2 + 1, grid**2 + 1]
+            # 调整为 (b, heads, grid**2 + 1, grid**2 + 1)
+            attention_mask = attention_mask.unsqueeze(1).repeat(1, self.heads, 1, 1)  # [b, heads, grid**2 + 1, grid**2 + 1]
+            # 重塑为 (batch * heads, L, L)
+            attention_mask = attention_mask.view(-1, attention_mask.shape[2], attention_mask.shape[3])  # [b * heads, grid**2 + 1, grid**2 + 1]
+
 
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x, attention_mask)

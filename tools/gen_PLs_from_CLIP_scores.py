@@ -62,12 +62,12 @@ def postprocessing(
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='generate PLs with pre-computed CLIP scores.')
     parser.add_argument('--gt_json', type=str, default='/data1/liangzhijia//datasets/coco/annotations/open_voc/instances_train.json', help='gt coco json file. We only annotations of base categories')
-    parser.add_argument('--clip_score_dir', type=str, default='./CLIP_scores_for_PLs', help='dir to save intermediate CLIP scores')
-    parser.add_argument('--pl_save_file', type=str, default='/data1/liangzhijia/datasets/coco/annotations/open_voc/mask_train_novel_candidate_0.5.json',
+    parser.add_argument('--clip_score_dir', type=str, default='./CLIP_scores_for_PLs/attn_mask', help='dir to save intermediate CLIP scores')
+    parser.add_argument('--pl_save_file', type=str, default='/data1/liangzhijia/datasets/coco/annotations/open_voc/attn_mask_train_novel_candidate_0.95.json',
                         help='PL coco json file')
 
     parser.add_argument('--lamda', type=float, default=0.5, help='the weight of RPN scores in RPN and CLIP score fusion. CLIP score weight: 1 - lamda (default: 0.5)')
-    parser.add_argument('--thres', type=float, default=0.5, help='threshold for score fusion (default: 0.8)')
+    parser.add_argument('--thres', type=float, default=0.95, help='threshold for score fusion (default: 0.8)')
     parser.add_argument('--nms_thres', type=float, default=0.6, help='threshold for NMS (default: 0.6)')
 
     args = parser.parse_args()
@@ -75,7 +75,7 @@ if __name__ == '__main__':
     ###################################p
     orig_json_file = args.gt_json
     rec_json_dir = args.clip_score_dir
-    save_json_file = args.pl_save_file
+    save_json_file = args.pl_save_file[:-9] + str(args.thres) + ".json"
 
     mean_thres = args.thres
     # mean_thres = 0.95
@@ -93,7 +93,7 @@ if __name__ == '__main__':
     print('baseCatIds:', len(baseCatIds), baseCatIds)
     print('novelCatIds:', len(novelCatIds), novelCatIds)
 
-    jsonFileList = sorted(glob.glob(os.path.join(rec_json_dir, 'CLIP_scores_mask*.json')))
+    jsonFileList = sorted(glob.glob(os.path.join(rec_json_dir, '*.json')))
     print('jsonFile num: ', len(jsonFileList))
 
     # load annotations for base categories
@@ -124,6 +124,8 @@ if __name__ == '__main__':
 
         for iidx, curImgIdx in enumerate(imgId_list):
             curBoxList = bbox_all_list[iidx]
+            if len(curBoxList) == 0:
+                continue
             curRPNScoreList = rpn_score_all_list[iidx]
             curCLIPScoreList = clip_score_all_list[iidx]
             curCatIDsList = clip_catIDs_all_list[iidx]

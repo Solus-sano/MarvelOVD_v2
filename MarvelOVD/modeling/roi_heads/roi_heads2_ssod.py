@@ -152,22 +152,22 @@ class SSODROIHeads(StandardROIHeads):
         box_features = self.box_head(box_features)
         predictions = self.box_predictor(box_features)
         ############################ add ############################
-        instance_cnt_per_image = [len(x) for x in gt_boxes_lst]
-        cls_logits_all, bbox_deltas_all = predictions
-        cls_logits_lst = cls_logits_all.split(instance_cnt_per_image, dim=0)
+        # instance_cnt_per_image = [len(x) for x in gt_boxes_lst]
+        # cls_logits_all, bbox_deltas_all = predictions
+        # cls_logits_lst = cls_logits_all.split(instance_cnt_per_image, dim=0)
         
-        new_cls_logits_lst = []
-        for cls_logits, gt_boxes in zip(cls_logits_lst, gt_boxes_lst):
-            new_cls_logits_lst.append(
-                faster_update_logic_after_nms_3(
-                    cls_logits, 
-                    gt_boxes.tensor,
-                    beta=0.1,
-                    sigma=0.0
-                )
-            )
-        new_cls_logits_all = torch.concat(new_cls_logits_lst, dim=0)
-        predictions = [new_cls_logits_all, bbox_deltas_all]
+        # new_cls_logits_lst = []
+        # for cls_logits, gt_boxes in zip(cls_logits_lst, gt_boxes_lst):
+        #     new_cls_logits_lst.append(
+        #         faster_update_logic_after_nms_3(
+        #             cls_logits, 
+        #             gt_boxes.tensor,
+        #             beta=0.1,
+        #             sigma=0.0
+        #         )
+        #     )
+        # new_cls_logits_all = torch.concat(new_cls_logits_lst, dim=0)
+        # predictions = [new_cls_logits_all, bbox_deltas_all]
         ############################ add ############################
         scores = self.box_predictor.predict_probs(predictions, gt_boxes_lst)
         # scores: List[Tensor]

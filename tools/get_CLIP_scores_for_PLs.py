@@ -31,12 +31,12 @@ from logits_decode import faster_update_logits
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Pre-compute CLIP scores for PL generation.')
-    parser.add_argument('RPN_config', type=str, help='config file for proposal network')
-    parser.add_argument('RPN_weight_file', type=str, help='weight file for proposal network')
+    parser.add_argument('--RPN_config', type=str, help='config file for proposal network',default="../configs/mask_rcnn_R_50_FPN_1x_base_num1.yaml")
+    parser.add_argument('--RPN_weight_file', type=str, help='weight file for proposal network',default="./mask_rcnn_R_50_FPN_1x_base_num1.pth")
 
     parser.add_argument('--gt_json', type=str, default='../../datasets/coco/annotations/instances_train2017.json',
                         help='GT coco json file. We only annotations of base categories')
-    parser.add_argument('--save_dir', type=str, default='./CLIP_scores_for_PLs',
+    parser.add_argument('--save_dir', type=str, default='./CLIP_scores_for_PLs/origin_rpn_thr80',
                         help='PL coco json file to save')
 
     parser.add_argument('--coco_root', type=str, default='../../datasets/coco', help='coco root dir')
@@ -106,6 +106,7 @@ if __name__ == '__main__':
     coco = COCO(orig_COCOJson_file)
 
     imgIdsList = sorted(coco.getImgIds())
+    imgIdsList = imgIdsList[:10000]
     print('total image num: ', len(imgIdsList))
 
     usedCatIds_inOrder = np.array(get_coco_ids_by_order(coco, usedCatNames))
@@ -143,21 +144,27 @@ if __name__ == '__main__':
 
         # get region proposals
         proposal_boxes, pp_scores = get_region_proposal(cvImg, maskRCNN, DataAug=DataAug, roihead_num=roiBoxRepeat_num, topK_box=pp_topK)
+        new_proposal_boxes, new_pp_scores = [], []
+        for box, score in zip(proposal_boxes, pp_scores):
+            if score > 0.8:
+                new_proposal_boxes.append(box)
+                new_pp_scores.append(score)
+        proposal_boxes, pp_scores = new_proposal_boxes, new_pp_scores
         # get CLIP scores
         curBoxList, curRPNScoreList, curCLIPScoreList, curPredCOCOIdList, curCLIPLogitsTensor = get_CLIP_pred_for_proposals(cvImg, proposal_boxes, pp_scores,
                                                                             CLIPModel, preprocess, text_embed, usedCatIds_inOrder,
                                                                             box_scalelist=box_scalelist, topK_clip_scores=topK_clip_scores,
-                                                                            device=device, return_logits=True)
+                                                                            device=device, return_logits=True, image_id=img_id, coco_api=coco)
 
         # add to final results
         boxAllList.append(curBoxList)
         rpnScoreAlllist.append(curRPNScoreList)
         scoreAllList.append(curCLIPScoreList)
         cocoIDAllList.append(curPredCOCOIdList)
-        logitsALLList.append(curCLIPLogitsTensor.tolist())
+        logitsALLList.append(curCLIPLogitsTensor)
 
         # save current data to file
-        if (iidx + 1) % 100 == 0 or iidx >= len(used_image_ids)-1:
+        if (iidx + 1) % 1000 == 0 or iidx >= len(used_image_ids)-1:
             data = {'img_ids_list': imgIdList,
                     'bbox_all_list': boxAllList,
                     'rpn_score_all_list': rpnScoreAlllist,

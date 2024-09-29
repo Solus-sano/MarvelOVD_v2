@@ -23,6 +23,7 @@ from detectron2.data import (
 )
 import copy
 from pycocotools.cocoeval import COCOeval
+from pycocotools.coco import COCO
 from tqdm import tqdm
 
 logger = logging.getLogger("detectron2")
@@ -74,8 +75,6 @@ class COCO_json_evaluator(COCOEvaluator):
         precisions = coco_eval.eval["precision"]
         recalls = coco_eval.eval["recall"]
         # precision has dims (iou, recall, cls, area range, max dets)
-        print(len(class_names))
-        print(precisions.shape)
         assert len(class_names) == precisions.shape[2]
 
         results_per_category = []
@@ -107,10 +106,12 @@ class COCO_json_evaluator(COCOEvaluator):
         recall_novel = np.mean([i[1] for i in recall_per_category if i[0] in EVAL_CATEGORIES])
         precision_novel = np.mean([i[1] for i in precision_per_category if i[0] in EVAL_CATEGORIES])
         
+        f1_score = 2*(recall_novel * precision_novel) / (recall_novel + precision_novel + 1e-8)
         self._logger.info(
             f"Evaluation recall and precision (iou_thr=0.5) \n" + create_small_table({
                 "recall_novel": recall_novel,
-                "precision_novel": precision_novel
+                "precision_novel": precision_novel,
+                "f1 score": f1_score
             })
         )
         
@@ -141,7 +142,7 @@ class COCO_json_evaluator(COCOEvaluator):
     
     def process_json(self, coco_dt):
         tmp_map = {}
-        thing_dataset_id_to_contiguous_id = MetadataCatalog.get("coco_openvoc_train").thing_dataset_id_to_contiguous_id
+        thing_dataset_id_to_contiguous_id = MetadataCatalog.get("coco_train_novel").thing_dataset_id_to_contiguous_id
         for item in coco_dt["annotations"]:
             result = {
                 "image_id": item["image_id"],
@@ -233,28 +234,31 @@ def evaluate():
     print(args)
     cfg = setup(args)
     
-    PLs_json_file = "/data1/liangzhijia/datasets/coco/annotations/open_voc/mask_train_novel_candidate_0.5.json"
+    PLs_json_file = "/data1/liangzhijia/datasets/coco/annotations/open_voc/img10000_rpn80_merge_attn_mask_train_novel_candidate_0.5.json"
     
-    evaluator = COCO_json_evaluator("coco_train", cfg, False)
+    evaluator = COCO_json_evaluator("coco_train_novel", cfg, False)
     result = inference_on_json(PLs_json_file, evaluator)
 
     print_csv_format(result)
     
 def create_gt_json():
-    data = load_json("/data1/liangzhijia/datasets/coco/annotations/instances_train2017.json")
+    origin_json = "/data1/liangzhijia/datasets/coco/annotations/instances_train2017.json"
+    data = load_json(origin_json)
     # dict_keys(['info', 'licenses', 'images', 'annotations', 'categories'])
+    coco_api = COCO(origin_json)
+    imgIdsList = sorted(coco_api.getImgIds())[:10000]
     new_ann = []
     new_category = []
-    meta = MetadataCatalog.get("coco_train")
+    meta = MetadataCatalog.get("coco_train_novel")
     thins_id_to_continugous_id = meta.thing_dataset_id_to_contiguous_id
     meta_thing_ids = list(thins_id_to_continugous_id.keys())
     print(len(meta_thing_ids))
-    print("init data len: ", len(data['annotations']))
+    print("init annotation len: ", len(data['annotations']))
     print("init category len: ", len(data['categories']))
     
     for ann in tqdm(data['annotations']):
         catID = ann['category_id']
-        if catID in meta_thing_ids:
+        if catID in meta_thing_ids and ann['image_id'] in imgIdsList:
             new_ann.append(ann)
     
     for cate in tqdm(data['categories']):
@@ -264,9 +268,9 @@ def create_gt_json():
     
     data['annotations'] = new_ann
     data['categories'] = new_category
-    print("after filter data len: ", len(data['annotations']))
+    print("after filter annotation len: ", len(data['annotations']))
     print("after filter category len: ", len(data['categories']))
-    new_file = "/data1/liangzhijia/datasets/coco/annotations/instances_cat65_train2017.json"
+    new_file = "/data1/liangzhijia/datasets/coco/annotations/instances_img10000_novel17_train2017.json"
     
     with open(new_file, 'w') as f:
         json.dump(data, f)

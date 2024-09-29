@@ -455,6 +455,10 @@ _PREDEFINED_SPLITS_COCO_PSEUDO = {
         "/data1/liangzhijia/datasets/coco/train2017", "/data1/liangzhijia/datasets/coco/annotations/instances_cat65_train2017.json",
         BASE_CATEGORIES + EVAL_CATEGORIES),
     
+    "coco_train_novel": (
+        "/data1/liangzhijia/datasets/coco/train2017", "/data1/liangzhijia/datasets/coco/annotations/instances_img10000_novel17_train2017.json",
+        EVAL_CATEGORIES),
+    
     "coco_openvoc_train_with_clip": (
         "/data1/liangzhijia/datasets/coco/train2017", "/data1/liangzhijia/datasets/coco/annotations/open_voc/train_novel_candidate_0.5.json",
         BASE_CATEGORIES + EVAL_CATEGORIES),

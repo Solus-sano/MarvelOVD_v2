@@ -252,7 +252,7 @@ def CLIP_score_multi_scale(clip_model, img_patch_scalelist, text_features, softm
         similarity = ((1 / softmax_t) * image_features @ text_features.T).softmax(dim=-1)
         allSimilarity.append(similarity)
 
-        logits = (1 / softmax_t) * image_features @ text_features.T # shape: (1, 17)
+        logits = (1 / softmax_t) * image_features @ text_features.T # shape: (n, 17)
         allLogits.append(logits)
         
     allSimilarity = torch.cat(allSimilarity, dim=0)
@@ -261,7 +261,7 @@ def CLIP_score_multi_scale(clip_model, img_patch_scalelist, text_features, softm
         return allSimilarity, allLogits
     return allSimilarity
 
-def mask_CLIP_score_multi_scale(clip_model, img_patch_scalelist, mask_img_patch_scalelist, text_features, softmax_t=0.01, return_logits=False):
+def attn_mask_CLIP_score_multi_scale(clip_model, img_patch_scalelist, clip_attn_mask_scalelist, text_features, softmax_t=0.01, return_logits=False):
     # img_patch_scalelist: [ [n*patches for scale 1], [n*patches for scale 2], ...]
     # patchNum = img_patch_scalelist[0].shape[0]
 
@@ -273,7 +273,6 @@ def mask_CLIP_score_multi_scale(clip_model, img_patch_scalelist, mask_img_patch_
         splitIdxList.append(patchNum)
 
     allSimilarity = []
-    mask_allSimilarity = []
     allLogits = []
 
     for sp_idx in range(len(splitIdxList) - 1):
@@ -282,16 +281,65 @@ def mask_CLIP_score_multi_scale(clip_model, img_patch_scalelist, mask_img_patch_
 
         image_features = None
         mask_image_features = None
-        for s_id, (imgPatchesList, mask_imgPatchesList) in enumerate(zip(img_patch_scalelist, mask_img_patch_scalelist)):
+        for s_id, (imgPatchesList, attn_mask_list) in enumerate(zip(img_patch_scalelist, clip_attn_mask_scalelist)):
             imgPatches = torch.cat(imgPatchesList[startIdx:endIdx], dim=0)
-            mask_imgPatches = torch.cat(mask_imgPatchesList[startIdx:endIdx], dim=0)
+            attn_mask = torch.cat(attn_mask_list[startIdx:endIdx] ,dim=0)
+
+            with torch.no_grad():
+                curImgFeat = clip_model.encode_image(imgPatches, attn_mask)
+                curImgFeat /= curImgFeat.norm(dim=-1, keepdim=True)
+
+            if image_features is None:
+                image_features = curImgFeat.clone()
+            else:
+                image_features += curImgFeat
+
+        sacleNum = len(img_patch_scalelist)
+        image_features /= sacleNum
+        image_features /= image_features.norm(dim=-1, keepdim=True)
+
+        similarity = ((1 / softmax_t) * image_features @ text_features.T).softmax(dim=-1)
+        allSimilarity.append(similarity)
+
+        logits = (1 / softmax_t) * image_features @ text_features.T # shape: (1, 17)
+        allLogits.append(logits)
+        
+    allSimilarity = torch.cat(allSimilarity, dim=0)
+    allLogits = torch.cat(allLogits, dim=0)
+    if return_logits:
+        return allSimilarity, allLogits
+    return allSimilarity
+
+def merge_attn_mask_CLIP_score_multi_scale(clip_model, img_patch_scalelist, clip_attn_mask_scalelist, text_features, softmax_t=0.01, return_logits=False, merge_lambda=0.5):
+    # img_patch_scalelist: [ [n*patches for scale 1], [n*patches for scale 2], ...]
+    # patchNum = img_patch_scalelist[0].shape[0]
+
+    patchNum = len(img_patch_scalelist[0])
+    patch_per_split = 1000
+
+    splitIdxList = [i*patch_per_split for i in range(1 + patchNum//patch_per_split)]
+    if splitIdxList[-1] != patchNum:
+        splitIdxList.append(patchNum)
+
+    allSimilarity = []
+    allLogits = []
+
+    for sp_idx in range(len(splitIdxList) - 1):
+        startIdx = splitIdxList[sp_idx]
+        endIdx = splitIdxList[sp_idx + 1]
+
+        image_features = None
+        mask_image_features = None
+        for s_id, (imgPatchesList, attn_mask_list) in enumerate(zip(img_patch_scalelist, clip_attn_mask_scalelist)):
+            imgPatches = torch.cat(imgPatchesList[startIdx:endIdx], dim=0)
+            attn_mask = torch.cat(attn_mask_list[startIdx:endIdx] ,dim=0)
 
             with torch.no_grad():
                 curImgFeat = clip_model.encode_image(imgPatches)
                 curImgFeat /= curImgFeat.norm(dim=-1, keepdim=True)
                 
-                mask_curImgFeat = clip_model.encode_image(mask_imgPatches)
-                mask_curImgFeat /= mask_curImgFeat.norm(dim=-1, keepdim=True)
+                mask_image_features = clip_model.encode_image(imgPatches, attn_mask)
+                mask_image_features /= mask_image_features.norm(dim=-1, keepdim=True)
 
             if image_features is None:
                 image_features = curImgFeat.clone()
@@ -299,30 +347,32 @@ def mask_CLIP_score_multi_scale(clip_model, img_patch_scalelist, mask_img_patch_
                 image_features += curImgFeat
                 
             if mask_image_features is None:
-                mask_image_features = mask_curImgFeat.clone()
+                mask_image_features = mask_image_features.clone()
             else:
-                mask_image_features += mask_curImgFeat
+                mask_image_features += mask_image_features
 
         sacleNum = len(img_patch_scalelist)
         image_features /= sacleNum
         image_features /= image_features.norm(dim=-1, keepdim=True)
+        
         mask_image_features /= sacleNum
         mask_image_features /= mask_image_features.norm(dim=-1, keepdim=True)
 
-        similarity = ((1 / softmax_t) * image_features @ text_features.T).softmax(dim=-1)
+        origin_logit = (1 / softmax_t) * image_features @ text_features.T
+        mask_logit = (1 / softmax_t) * mask_image_features @ text_features.T
+        merge_logit = origin_logit * (1 - merge_lambda) + mask_logit * merge_lambda
+        
+        similarity = (merge_logit).softmax(dim=-1)
         allSimilarity.append(similarity)
-        mask_similarity = ((1 / softmax_t) * mask_image_features @ text_features.T).softmax(dim=-1)
-        mask_allSimilarity.append(mask_similarity)
 
-        logits = (1 / softmax_t) * image_features @ text_features.T # shape: (1, 17)
-        allLogits.append(logits)
+        # logits = (1 / softmax_t) * image_features @ text_features.T # shape: (1, 17)
+        allLogits.append(merge_logit)
         
     allSimilarity = torch.cat(allSimilarity, dim=0)
-    mask_allSimilarity = torch.cat(mask_allSimilarity, dim=0)
     allLogits = torch.cat(allLogits, dim=0)
     if return_logits:
-        return allSimilarity, mask_allSimilarity, allLogits
-    return allSimilarity, mask_allSimilarity
+        return allSimilarity, allLogits
+    return allSimilarity
 
 # partially run roi_head of the detectron2 model
 def refineBoxByRoIHead(roi_head, features, proposals):
@@ -383,12 +433,14 @@ def get_region_proposal(input_img, CA_maskRCNN, DataAug=None, roihead_num=10, to
 
 def get_CLIP_pred_for_proposals(input_img, proposal_boxes, pp_scores,
                                 CLIP_model, preprocess, clip_text_embed, usedCatIds_inOrder,
-                                box_scalelist=[1, 1.5], topK_clip_scores=1, device='cuda', return_logits=False):
+                                box_scalelist=[1, 1.5], topK_clip_scores=1, device='cuda', return_logits=False, image_id = 0, coco_api = None):
     '''
     input_img: from cv2.imread, in BGR
     proposal_boxes: [[xyxy], [xyxy], ...]
     pp_scores: objectness scores for each region proposal
     '''
+    proposal_boxes, pp_scores, _ = filt_gt_base_box(image_id=image_id, proposal_boxes=proposal_boxes, pp_scores=pp_scores, coco=coco_api, iou_thresh=0.5)
+    proposal_boxes, pp_scores = proposal_boxes.tolist(), pp_scores.tolist()
     height, width = input_img.shape[:2]  # BGR
     pilImg = Image.fromarray(input_img[:, :, ::-1])  # RGB
 
@@ -398,6 +450,7 @@ def get_CLIP_pred_for_proposals(input_img, proposal_boxes, pp_scores,
     curRPNScoreList = list()
     curCLIPScoreList = list()
     curPredCatIdList = list()
+    curCLIPLogitList = list()
 
     clipInput_list_scalelist = [[] for i in range(len(box_scalelist))]
     for b_idx, box in enumerate(proposal_boxes):
@@ -416,6 +469,7 @@ def get_CLIP_pred_for_proposals(input_img, proposal_boxes, pp_scores,
 
     if len(curBoxList) > 0:
         allSimilarity, allLogits = CLIP_score_multi_scale(CLIP_model, clipInput_list_scalelist, clip_text_embed, return_logits=return_logits)
+        curCLIPLogitList.append(allLogits.tolist())
 
         ############### merge CLIP and RPN scores
         for b_idx, box in enumerate(curBoxList):
@@ -425,19 +479,23 @@ def get_CLIP_pred_for_proposals(input_img, proposal_boxes, pp_scores,
             curPredCatIdList.append(usedCatIds_inOrder[indices.cpu().numpy()].tolist())
 
     if return_logits:
-        return curBoxList, curRPNScoreList, curCLIPScoreList, curPredCatIdList, allLogits
+        return curBoxList, curRPNScoreList, curCLIPScoreList, curPredCatIdList, curCLIPLogitList
     return curBoxList, curRPNScoreList, curCLIPScoreList, curPredCatIdList
 
-def get_better_CLIP_pred_for_proposals(input_img, proposal_boxes, pp_scores,
+def get_better_CLIP_pred_for_proposals(image_id, input_img, proposal_boxes, pp_scores,
                                 CLIP_model, preprocess, clip_text_embed, usedCatIds_inOrder,
                                 box_scalelist=[1, 1.5], topK_clip_scores=1, device='cuda', return_logits=False,
-                                visual_root = None, coco_api = None
+                                visual_root = None, coco_api = None, gt_base_boxes = None
                             ):
     '''
     input_img: from cv2.imread, in BGR
     proposal_boxes: [[xyxy], [xyxy], ...]
     pp_scores: objectness scores for each region proposal
     '''
+    if len(proposal_boxes) == 0:
+        if return_logits:
+            return [], [], [], [], []
+        return [], [], [], []
     height, width = input_img.shape[:2]  # BGR
     pilImg = Image.fromarray(input_img[:, :, ::-1])  # RGB
     proposal_boxes, pp_scores = sort_pp_box(proposal_boxes, pp_scores)
@@ -446,7 +504,10 @@ def get_better_CLIP_pred_for_proposals(input_img, proposal_boxes, pp_scores,
     for pp_b, pp_s in zip(proposal_boxes, pp_scores):
         if pp_s < 0.95:
             break
-        better_proposal_boxes.append(pp_b)
+        better_proposal_boxes.append(copy.deepcopy(pp_b))
+
+    if gt_base_boxes is not None:
+        better_proposal_boxes = gt_base_boxes.tolist() + better_proposal_boxes
 
     usedCatNum = len(usedCatIds_inOrder)
 
@@ -454,6 +515,7 @@ def get_better_CLIP_pred_for_proposals(input_img, proposal_boxes, pp_scores,
     curRPNScoreList = list()
     curCLIPScoreList = list()
     curPredCatIdList = list()
+    curCLIPLogitList = list()
 
     trans = T.Compose([
         T.Resize(224),
@@ -461,8 +523,11 @@ def get_better_CLIP_pred_for_proposals(input_img, proposal_boxes, pp_scores,
         T.ToTensor(),
     ])
 
+    proposal_boxes, pp_scores, _ = filt_gt_base_box(image_id=image_id, proposal_boxes=proposal_boxes, pp_scores=pp_scores, coco=coco_api, iou_thresh=0.5)
+    proposal_boxes, pp_scores = proposal_boxes.tolist(), pp_scores.tolist()
+    
     clipInput_list_scalelist = [[] for i in range(len(box_scalelist))]
-    mask_clipInput_list_scalelist = [[] for i in range(len(box_scalelist))]
+    clip_attn_mask_list_scalelist = [[] for i in range(len(box_scalelist))]
     for b_idx, box in enumerate(proposal_boxes):
         box = scale_box(box, 1, max_H=height, max_W=width)  # ensure every box is in the image
         if box[2] - box[0] >= 5 and box[3] - box[1] >= 5:
@@ -479,11 +544,11 @@ def get_better_CLIP_pred_for_proposals(input_img, proposal_boxes, pp_scores,
                 # if len(better_proposal_boxes) > 0:
                     # mask_cropImg, flag = mask_overlaps(input_img, scaledBox, better_proposal_boxes, mask_thr=0.5, visual_root = visual_root)
                     # mask_cropImg = Image.fromarray(mask_cropImg)
-                mask_cropImg = mask_PilImg.crop(scaledBox)
+                # mask_cropImg = mask_PilImg.crop(scaledBox)
                 attention_crop_mask = attention_mask.crop(scaledBox)
 
                 clipInput = preprocess(cropImg).unsqueeze(0).to(device)
-                mask_clipInput = preprocess(mask_cropImg).unsqueeze(0).to(device)
+                # mask_clipInput = preprocess(mask_cropImg).unsqueeze(0).to(device)
                 attention_crop_mask = trans(attention_crop_mask).unsqueeze(0)[:,-1:,:,:]
                 attention_crop_mask = attention_crop_mask / torch.max(attention_crop_mask)
                 # print(attention_crop_mask)
@@ -538,12 +603,15 @@ def get_better_CLIP_pred_for_proposals(input_img, proposal_boxes, pp_scores,
                 
                 # continue
                 clipInput_list_scalelist[scale_id].append(clipInput)
-                mask_clipInput_list_scalelist[scale_id].append(mask_clipInput)
+                clip_attn_mask_list_scalelist[scale_id].append(attention_crop_mask)
+                # mask_clipInput_list_scalelist[scale_id].append(mask_clipInput)
     # return
     if len(curBoxList) > 0:
-        allSimilarity, allLogits = CLIP_score_multi_scale(CLIP_model, mask_clipInput_list_scalelist, clip_text_embed, return_logits=return_logits)
-        # allSimilarity, maskallSimilarity, allLogits = mask_CLIP_score_multi_scale(CLIP_model, clipInput_list_scalelist, clip_text_embed, return_logits=return_logits)
+        # allSimilarity, allLogits = CLIP_score_multi_scale(CLIP_model, clipInput_list_scalelist, clip_text_embed, return_logits=return_logits)
+        allSimilarity, allLogits = attn_mask_CLIP_score_multi_scale(CLIP_model, clipInput_list_scalelist, clip_attn_mask_list_scalelist, clip_text_embed, return_logits=return_logits)
+        # allSimilarity, allLogits = merge_attn_mask_CLIP_score_multi_scale(CLIP_model, clipInput_list_scalelist, clip_attn_mask_list_scalelist, clip_text_embed, return_logits=return_logits)
 
+        curCLIPLogitList.append(allLogits.cpu().numpy().tolist())
         ############### merge CLIP and RPN scores
         for b_idx, box in enumerate(curBoxList):
             clipScores, indices = allSimilarity[b_idx][:usedCatNum].topk(topK_clip_scores)
@@ -552,7 +620,7 @@ def get_better_CLIP_pred_for_proposals(input_img, proposal_boxes, pp_scores,
             curPredCatIdList.append(usedCatIds_inOrder[indices.cpu().numpy()].tolist())
 
     if return_logits:
-        return curBoxList, curRPNScoreList, curCLIPScoreList, curPredCatIdList, allLogits
+        return curBoxList, curRPNScoreList, curCLIPScoreList, curPredCatIdList, curCLIPLogitList
     return curBoxList, curRPNScoreList, curCLIPScoreList, curPredCatIdList
 
 def detection_postprocessing(box_List, score_List, pred_id_list,
@@ -802,6 +870,8 @@ def get_mask_img(img,
         mask_thr: 面积遮罩阈值
     return:
         mask_PILimg: mask后的原图(PIL Image)
+        attention_mask: 与mask_PILimg形状相同的01矩阵, 0代表该像素需要被mask(PIL Image)
+        flag: 1则表示对图像进行了mask, 0则表示没有
     """
     mask_img = torch.tensor(copy.deepcopy(img),dtype=torch.float32) / 255.0
     attention_mask = torch.ones_like(mask_img)
@@ -929,6 +999,7 @@ def filt_gt_base_box(image_id, proposal_boxes, pp_scores, coco: COCO, iou_thresh
     output:
         new_proposal_boxes: (M, 4)
         new_pp_scores: (M, )
+        gt_base_boxes: (p, 4)
     """
     # 获取该图片的所有annotation IDs
     annotation_ids = coco.getAnnIds(imgIds=image_id)
@@ -938,9 +1009,14 @@ def filt_gt_base_box(image_id, proposal_boxes, pp_scores, coco: COCO, iou_thresh
     
     # 仅保留基类标注
     gt_base_anns = [item for item in annotations if item['category_id'] in BASE_CATEGORIES_ID]
+    if len(gt_base_anns) == 0:
+        return torch.tensor(proposal_boxes), torch.tensor(pp_scores), None
     
     # 提取基类标注的bounding boxes
     gt_base_boxes = torch.tensor([ann['bbox'] for ann in gt_base_anns])
+    #xyhw to xyxy
+    gt_base_boxes[:, 2] = gt_base_boxes[:, 0] + gt_base_boxes[:, 2]  # x_max = x_min + width
+    gt_base_boxes[:, 3] = gt_base_boxes[:, 1] + gt_base_boxes[:, 3]  # y_max = y_min + height
     
     pp_gt_iou = box_iou(torch.tensor(proposal_boxes), gt_base_boxes)
     
@@ -950,7 +1026,7 @@ def filt_gt_base_box(image_id, proposal_boxes, pp_scores, coco: COCO, iou_thresh
     new_proposal_boxes = torch.tensor(proposal_boxes)[keep]
     new_pp_scores = torch.tensor(pp_scores)[keep]
     
-    return new_proposal_boxes, new_pp_scores
+    return new_proposal_boxes, new_pp_scores, gt_base_boxes
 
 
 

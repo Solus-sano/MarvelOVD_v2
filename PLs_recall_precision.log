@@ -1,10 +1,55 @@
 Evaluation recall and precision (iou_thr=0.5) 
 
-|  recall_novel  |  precision_novel  |
-|:--------------:|:-----------------:|
+|  recall_novel  |  precision_novel  |  f1 score  |
+|:--------------:|:-----------------:|:----------:|
+clip score(thr=0.5)
+|     46.988     |       8.191       |   13.950   |
+clip score(thr=0.8)
+|     40.693     |      17.284       |   24.263   |
+clip score(thr=0.9)
+|     36.225     |      22.182       |   27.515   |
+clip score(thr=0.95)
+|     31.718     |      27.537       |   29.480   |
 
-clip score
-|     49.342     |       6.962       |
+|:--------------:|:-----------------:|:----------:|
+attn mask clip score(thr=0.5)
+|     45.860     |       9.110       |   15.200   |
+attn mask clip score(thr=0.8)
+|     39.053     |      17.043       |   23.730   |
+attn mask clip score(thr=0.9)
+|     34.959     |      22.913       |   27.682   |
+attn mask clip score(thr=0.95)
+|     30.666     |      28.744       |   29.674   |
 
-mask(black) clip score
-|     44.967     |       7.184       |
+
+
+
+|:--------------:|:-----------------:|:----------:|
+clip score rpnthr=0.8(thr=0.5)
+|     38.257     |      16.776       |   23.325   |
+clip score rpnthr=0.8(thr=0.8)
+|     33.028     |      28.861       |   30.804   |
+clip score rpnthr=0.8(thr=0.9)
+|     29.460     |      35.827       |   32.333   |
+clip score rpnthr=0.8(thr=0.95)
+|     25.518     |      43.422       |   32.145   |
+
+|:--------------:|:-----------------:|:----------:|
+attn mask clip score rpnthr=0.8(thr=0.5)
+|     39.368     |      17.144       |   23.886   |
+attn mask clip score rpnthr=0.8(thr=0.8)
+|     33.431     |      30.002       |   31.624   |
+attn mask clip score rpnthr=0.8(thr=0.9)
+|     29.911     |      37.194       |   33.157   |
+attn mask clip score rpnthr=0.8(thr=0.95)
+|     25.980     |      45.433       |   33.057   |
+
+|:--------------:|:-----------------:|:----------:|
+merge attn mask clip score rpnthr=0.8(thr=0.5)
+|     41.206     |      15.523       |   22.551   |
+merge mask clip score rpnthr=0.8(thr=0.8)
+|     35.447     |      27.344       |   30.872   |
+merge mask clip score rpnthr=0.8(thr=0.9)
+|     31.659     |      34.834       |   33.171   |
+merge mask clip score rpnthr=0.8(thr=0.95)
+|     28.082     |      41.770       |   33.585   |

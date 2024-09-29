@@ -39,7 +39,7 @@ def main():
 
     parser.add_argument('--gt_json', type=str, default='../../datasets/coco/annotations/instances_train2017.json',
                         help='GT coco json file. We only annotations of base categories')
-    parser.add_argument('--save_dir', type=str, default='./CLIP_scores_for_PLs/attn_mask_noise',
+    parser.add_argument('--save_dir', type=str, default='./CLIP_scores_for_PLs/attn_mask',
                         help='PL coco json file to save')
 
     parser.add_argument('--coco_root', type=str, default='../../datasets/coco', help='coco root dir')
@@ -109,6 +109,7 @@ def main():
     coco = COCO(orig_COCOJson_file)
 
     imgIdsList = sorted(coco.getImgIds())
+    # imgIdsList = imgIdsList[:10000]
     print('total image num: ', len(imgIdsList))
 
     usedCatIds_inOrder = np.array(get_coco_ids_by_order(coco, usedCatNames))
@@ -151,16 +152,24 @@ def main():
         # os.makedirs(visual_root, exist_ok=True)
         # cv2.imwrite(os.path.join(visual_root, 'ori.png'), cvImg)
         proposal_boxes, pp_scores = get_region_proposal(cvImg, maskRCNN, DataAug=DataAug, roihead_num=roiBoxRepeat_num, topK_box=pp_topK)
-        proposal_boxes, pp_scores = filt_gt_base_box(img_id, proposal_boxes, pp_scores, coco, iou_thresh=0.5)
+        # new_proposal_boxes, new_pp_scores = [], []
+        # for box, score in zip(proposal_boxes, pp_scores):
+        #     if score > 0.8:
+        #         new_proposal_boxes.append(box)
+        #         new_pp_scores.append(score)
+        # proposal_boxes, pp_scores = new_proposal_boxes, new_pp_scores
+        # if len(proposal_boxes) == 0:
+        #     continue
+        # proposal_boxes, pp_scores, gt_base_box = filt_gt_base_box(img_id, proposal_boxes, pp_scores, coco, iou_thresh=0.5)
         # get CLIP scores
-        # get_better_CLIP_pred_for_proposals(cvImg, proposal_boxes, pp_scores,
-        #                                                                     CLIPModel, preprocess, text_embed, usedCatIds_inOrder,
-        #                                                                     box_scalelist=box_scalelist, topK_clip_scores=topK_clip_scores,
-        #                                                                     device=device, return_logits=True, visual_root=visual_root, coco_api=coco)
-        curBoxList, curRPNScoreList, curCLIPScoreList, curPredCOCOIdList, curCLIPLogitsTensor = get_better_CLIP_pred_for_proposals(cvImg, proposal_boxes, pp_scores,
+        # get_better_CLIP_pred_for_proposals(img_id, cvImg, proposal_boxes, pp_scores,
+        #                                     CLIPModel, preprocess, text_embed, usedCatIds_inOrder,
+        #                                     box_scalelist=box_scalelist, topK_clip_scores=topK_clip_scores,
+        #                                     device=device, return_logits=True, visual_root=visual_root, coco_api=coco)
+        curBoxList, curRPNScoreList, curCLIPScoreList, curPredCOCOIdList, curCLIPLogitsTensor = get_better_CLIP_pred_for_proposals(img_id, cvImg, proposal_boxes, pp_scores,
                                                                             CLIPModel, preprocess, text_embed, usedCatIds_inOrder,
                                                                             box_scalelist=box_scalelist, topK_clip_scores=topK_clip_scores,
-                                                                            device=device, return_logits=True)
+                                                                            device=device, return_logits=True, coco_api=coco)
 
         # continue
         # add to final results
@@ -168,7 +177,7 @@ def main():
         rpnScoreAlllist.append(curRPNScoreList)
         scoreAllList.append(curCLIPScoreList)
         cocoIDAllList.append(curPredCOCOIdList)
-        logitsALLList.append(curCLIPLogitsTensor.tolist())
+        logitsALLList.append(curCLIPLogitsTensor)
 
         # save current data to file
         if (iidx + 1) % 1000 == 0 or iidx >= len(used_image_ids)-1:

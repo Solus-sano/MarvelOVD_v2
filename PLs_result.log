@@ -6,3 +6,6 @@ clip score
 
 mask clip score
 16.093, 99.979, 78.040
+
+attn mask clip score
+18.502, 99.979, 78.670

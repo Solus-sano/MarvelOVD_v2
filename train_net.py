@@ -1,6 +1,6 @@
 import logging
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3,4"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,5,6"
 from collections import OrderedDict
 import torch
 from torch.nn.parallel import DistributedDataParallel
